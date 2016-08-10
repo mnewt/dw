@@ -13,60 +13,6 @@ scriptbuilddate="2016-08-10"
 # If it's not run as root, then re-exec using sudo
 [ "$(whoami)" == "root" ] || exec sudo -- "$0" "$@"
 
-### VARS
-
-WHITE="\033[1;37m"
-CYAN="\033[1;36m"
-GREEN="\033[1;32m"
-NO_COLOR="\033[0m"
-
-# Supported parameters and defaults where appropriate
-name=
-description=
-image=
-volumes=
-nettype=bridge
-localip=
-# Guess the appropriate adapter name
-adapter=$(ip -o link show | awk -F'[ :]+' '{if ($9 == "UP" && $2 ~ /^en/ ) { print $2 }}')
-network=bridge
-subnet=
-ports=
-options=
-# depends=
-
-unit_template=
-# dw_template=
-dw_dir="$HOME/.bin"
-
-# Read container specific parameters
-# shellcheck source=/dev/null
-. "$build_dir/$build_file"
-
-# Assign defaults if parameters are still blank
-[ -z "$image" ] && image=$name
-[ -n "$subnet" ] && subnet_opts="--subnet $subnet"
-[ -z "$*" ] && set -- start
-
-# Make a list of the dw functions
-fns=$(awk '/^[0-9a-zA-Z]+\s*\(\)/ {print $1}' $0 $build_dir/$build_file)
-
-[ "$1" == "help" ] && display_help && exit
-
-# Find the parameter file
-if [ -d "$1" ]; then
-	build_dir=`cd "$1" && pwd`
-	build_file="DWfile"
-	shift
-elif [ -f "$1" ]; then
-	build_dir=`cd "$( dirname "$1" )" && pwd`
-	build_file="$(basename "$1")"
-	shift
-else
-	build_dir=$(pwd)
-	build_file="DWfile"
-fi
-
 ### FUNCTIONS
 
 display_ver () {
@@ -77,10 +23,16 @@ display_help () {
   display_ver   # Print script-title, build-number, and build-date
   cat <<-EOF
 
-Shell system for building and managing docker containers
+Shell script for building and managing docker containers
 Run each function in succession
+
 USAGE: $scriptname [BUILD-DIR | BUILD-FILE] [function1] [function2] [...]
-	No arguments: $scriptname start
+
+  Possible commands:
+
+$fns
+
+	If no arguments are specified, run: $scriptname start
 EOF
 }
 
@@ -561,6 +513,62 @@ command_loop () {
   done
 }
 
-## MAIN
+
+### VARS
+
+WHITE="\033[1;37m"
+CYAN="\033[1;36m"
+GREEN="\033[1;32m"
+NO_COLOR="\033[0m"
+
+# Supported parameters and defaults where appropriate
+name=
+description=
+image=
+volumes=
+nettype=bridge
+localip=
+# Guess the appropriate adapter name
+adapter=$(ip -o link show | awk -F'[ :]+' '{if ($9 == "UP" && $2 ~ /^en/ ) { print $2 }}')
+network=bridge
+subnet=
+ports=
+options=
+# depends=
+
+unit_template=
+# dw_template=
+dw_dir="$HOME/.bin"
+
+# Read container specific parameters
+# shellcheck source=/dev/null
+[ -f "$build_dir/$build_file" ] && . "$build_dir/$build_file"
+
+# Assign defaults if parameters are still blank
+[ -z "$image" ] && image=$name
+[ -n "$subnet" ] && subnet_opts="--subnet $subnet"
+[ -z "$*" ] && set -- start
+
+# Make a list of the dw functions
+fns=$(awk '/^[0-9a-zA-Z]+\s*\(\)/ {print $1}' $0 $build_dir/$build_file 2>/dev/null)
+
+[ "$1" == "help" ] && display_help && exit
+
+# Find the parameter file
+if [ -d "$1" ]; then
+	build_dir=`cd "$1" && pwd`
+	build_file="DWfile"
+	shift
+elif [ -f "$1" ]; then
+	build_dir=`cd "$( dirname "$1" )" && pwd`
+	build_file="$(basename "$1")"
+	shift
+else
+	build_dir=$(pwd)
+	build_file="DWfile"
+fi
+
+
+### MAIN
 
 command_loop "$@"

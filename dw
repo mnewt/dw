@@ -581,7 +581,7 @@ install () {
   while read line; do
 	  eval echo "$line"
 	done >/tmp/$name.service
-	exe cp /tmp/$name.service /usr/lib/systemd/system/$name.service
+	exe cp /tmp/$name.service /etc/systemd/system/$name.service
 	exe systemctl daemon-reload
 	exe systemctl enable $name
 }

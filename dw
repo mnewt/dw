@@ -1,26 +1,37 @@
 #!/bin/bash
 # dw: Docker wrapper
 # Shell script for building and managing docker containers on single host installations
-# Requirements: docker, wget
+# Requirements: docker, sudo, wget
 
-# TODO: Make it macos compatible
+# TODO:
+# - Rename `pipework` nettype to somewintg like `pipework-host`
+# - Add new nettype - `pipework-bridge`
+# - Inter-container routing support (using pipework)
+#   - gateway variable
+#   - static ip variable
+# - Make install/uninstall macos compatible
+# - When systemd calls `run -a` on a container that isn't built, it doesn't work right
+# - Disable icc by default
+
+set -o nounset   # Treat unset variables as an error
 
 scriptname="dw"
-scriptbuildnum="0.6"
-scriptbuilddate="2016-08-10"
+scriptbuildnum="0.8"
+scriptbuilddate="2016-08-23"
 
-# This script needs to be run as root.
-# If it's not run as root, then re-exec using sudo
-[ "$(whoami)" == "root" ] || exec sudo -- "$0" "$@"
+if [ "$(whoami)" != "root" ]; then
+  echo "This script needs to be run as root. Re-exec-ing it with sudo..."
+  exec sudo -- "$0" "$@"
+fi
 
 ### FUNCTIONS
 
-display_ver () {
+version () {
   echo "$scriptname version $scriptbuildnum - $scriptbuilddate"
 }
 
-display_help () {
-  display_ver   # Print script-title, build-number, and build-date
+help () {
+  version
   cat <<-EOF
 
 Shell script for building and managing docker containers
@@ -32,12 +43,17 @@ USAGE: $scriptname [BUILD-DIR | BUILD-FILE] [function1] [function2] [...]
 
 $fns
 
-	If no arguments are specified, run: $scriptname start
+	If no arguments are specified, run: `$scriptname start`
 EOF
 }
 
-dwfile_template () {
-  cat <<-EOF
+template () {
+  if [ -f "$1" ]; then
+    cat "$1"
+  elif [ -f "$dw_template" ]; then
+    cat "$dw_template"
+  else
+    cat <<-EOF
 # Docker wrapper configuration file
 
 ### CONTAINER CONFIGURATION ###
@@ -51,6 +67,9 @@ description="A sample docker container"
 # The image label. If left blank, the container name is used
 image=
 
+# The hostname
+hostname=--name--
+
 # Volume options. Passed directly to `docker create`
 # volumes="-v /etc/localtime:/etc/localtime:ro -v /opt/config/$name:/config -v /data:/data"
 volumes="-v /etc/localtime:/etc/localtime:ro \
@@ -61,6 +80,8 @@ volumes="-v /etc/localtime:/etc/localtime:ro \
 # Options are:
 # - (blank): Defaults to bridge
 # - bridge: Use a docker bridge network
+# - host: Use the host network
+# - container: Share an existing container's network stack
 # - pipework: Create the container without networking, then use pipework to
 #             give the container an interface and IP address on the host's
 #             network adapter using macvlan
@@ -70,11 +91,11 @@ nettype=
 # - If `nettype=bridge`, use this host IP address to publish ports. If the host
 #   doesn't have the IP address configured, then it will be added. Specify in
 #   CIDR format.
-#   localip="192.168.0.89/24"
+#   hostip="192.168.0.89/24"
 # - If `nettype=pipework`, give the container this IP address on the host's
 #   local network using a macvlan interface. Use the format below.
-#   localip="192.168.0.89/24@192.168.0.1"
-localip=
+#   hostip="192.168.0.89/24@192.168.0.1"
+hostip=
 
 # Host adapter to bind the container to if `nettype=pipework`. If unspecified,
 # a guess is made
@@ -84,11 +105,21 @@ adapter=
 # The name of the docker network to connect to. It will be created if it doesn't
 # already exist. Defaults to `bridge`
 # network=netname
-network=
+network=bridge
 
 # The subnet of the docker network, in CIDR format
 # subnet="172.20.0.0/16"
 subnet=
+
+# Set the default gateway of the container
+gateway=
+
+# Set a static IP address for the container
+static_ip=
+
+# Enable inter-container communication
+# icc=true
+icc=false
 
 # IP ports to wire from container to host, using same port number on each side
 # Specify ports in one of these formats
@@ -97,43 +128,85 @@ subnet=
 # - Host port, ":", container port, e.g.:
 #   ports="80:8080 443:8443 8053:53/udp"
 # - docker publish syntax, e.g.:
-#   ports="-p $localip:80:8080 -p $localip:443:8443 -p $localip:8053:53/udp"
+#   ports="-p $hostip:80:8080 -p $hostip:443:8443 -p $hostip:8053:53/udp"
 ports=
 
 # Additional options to pass to `docker create`
 # options="--log-opt max-size=10m"
-options="--log-opt max-size=10m"
+docker_options="--log-opt max-size=10m"
+
+# Options to pass to docker run
+run_options=
+
+# Options to pass to the container entrypoint command
+cmd_options=
 
 # Adds a systemd unit as a service dependency when running `install` to install
-# the container as a system service
+# the container as a system service. Space separated list.
 # depends=other_container
 depends=
 
-### OVERRIDE FUNCTIONS ###
+# Global directory to store persistent configuration data
+config_dir=
+
+### FUNCTIONS ###
+# These are the functions that $scriptname accepts as commands and/or uses
+# internally. They can be overridden to add functionality.
+
 EOF
+    for f in $fns; do
+      echo "# - $f"
+    done
+  fi
 }
 
-unit_template () {
-  if [ -n "$unit_template" ]; then
+# shellcheck disable=SC2120
+unit () {
+  if [ -f "${1:-}" ]; then
+    cat "$1"
+  elif [ -f "${unit_template:-}" ]; then
     cat "$unit_template"
   else
+    unit_dependencies="$(for s in ${depends:-}; do echo -n "${s}.service "; done)"
     cat <<-EOF
 [Unit]
 Description=$description
-Requires=docker.service
-After=docker.service
+Requires=docker.service $unit_dependencies
+After=docker.service $unit_dependencies
 
 [Service]
 Restart=always
-ExecStart="$dw_dir/dw" "$build_dir/$build_file" run -a
-ExecStartPost="$dw_dir/dw" "$build_dir/$build_file" startpost
-ExecStop="$dw_dir/dw" "$build_dir/$build_file" stop
-ExecStopPost="$dw_dir/dw" "$build_dir/$build_file" stoppost
+ExecStart="$dw_cmd" "$dw_file" start -a
+ExecStartPost="$dw_cmd" "$dw_file" startpost
+ExecStop="$dw_cmd" "$dw_file" stop
+ExecStopPost="$dw_cmd" "$dw_file" stoppost
 
 [Install]
 WantedBy=multi-user.target
 EOF
   fi
+}
+
+parameters () {
+cat <<-EOF
+  dw_cmd=$dw_cmd
+  name=$name
+  description=$description
+  image=$image
+  volumes=$volumes
+  nettype=$nettype
+  hostip=$hostip
+  adapter=$adapter
+  network=${network:-}
+  subnet=${subnet:-}
+  ports=$ports
+  docker_options=$docker_options
+  run_options=${run_options:-}
+  cmd_options=${cmd_options:-}
+  depends=${depends:-}
+  unit_template=${unit_template:-}
+  dw_template=${dw_template:-}
+EOF
 }
 
 exe () {
@@ -167,6 +240,18 @@ startswith () {
     *)
       return 1 ;;
   esac
+}
+
+upsearch () {
+  local directory="$PWD"
+  while [ -n "$directory" ]; do
+    if [ -e "$directory/$1" ]; then
+      echo -e -n "$directory/$1"
+      return 0
+    fi
+    directory=${directory%/*}
+  done
+  return 1
 }
 
 timeago () {
@@ -210,7 +295,7 @@ isrunning () {
 }
 
 containerexists () {
-  docker ps -a  | grep -q $name
+  docker ps -a | grep -q $name
 }
 
 buildpre () {
@@ -226,15 +311,15 @@ buildpost () {
 build () {
 	# Build the container
   buildpre
-  if [ -n "$image" ] && [ -f "$build_dir/Dockerfile" ]; then
-  	exe docker build "$@" -t $name $build_dir
+  if [ "${dockerfile:-}" ] && [ -f "$build_dir/Dockerfile" ]; then
+  	exe docker build "$@" -t $name "$build_dir"
   	if [ "$nettype" == "pipework" ]; then
   		exe wget "https://raw.githubusercontent.com/jpetazzo/pipework/master/pipework" \
   			-O "$build_dir/pipework"
   		exe chmod u+x "$build_dir/pipework"
   	fi
   else
-    exe docker pull $image
+    exe docker pull "$image"
   fi
   buildpost
 }
@@ -247,8 +332,10 @@ rebuild () {
 
 publishports () {
   # Write out docker publish options
-  [ -n "$localip" ] && ip_opts="$(echo $localip | cut -d '/' -f1):"
-  case $ports in
+  local ip_opts; ip_opts=
+  [ -n "${hostip:-}" ] && ip_opts="$(echo $hostip | cut -d '/' -f1):"
+  case "${ports:-}" in
+    "") ;;
     -*)
       echo -n $ports
       ;;
@@ -265,20 +352,38 @@ publishports () {
     esac
 }
 
+addip () {
+  [ -n "${hostip:-}" ] && ! ip addr show | grep -q "$hostip" && \
+    exe ip address add "$hostip" dev $adapter
+}
+
 createnetwork () {
   # Create the docker network and output `docker create` network options
   case $nettype in
     pipework)
       # pipework will set up the network
-      echo -n "--net none"
+      echo -n "--net none "
+      ;;
+    container)
+      # share an existing container's network stack
+      echo -n "--net container:$network "
+      ;;
+    host)
+      addip
+      echo -n "--net host "
       ;;
     bridge)
+      addip
       docker network inspect $network >/dev/null 2>&1 || \
-        exe docker network create $subnet_opts $network >/dev/null
-      echo -n "--net $network "
+       exe docker network create $subnet_opts $network >/dev/null
+      echo -n "--net $network " # --icc=$icc "
       publishports
       ;;
   esac
+}
+
+get_hostname () {
+  [ "${hostname:-}" ] && echo -n "-h $hostname"
 }
 
 create () {
@@ -286,7 +391,7 @@ create () {
 	remove
 	[ -z "$(docker images -q $name)" ] && build
   # shellcheck disable=SC2046
-	exe docker create $volumes $options $(createnetwork) -h $name --name $name "$image"
+	exe docker create $volumes $docker_options $(createnetwork) $(get_hostname) --name $name "$image"
 }
 
 startpre () {
@@ -294,8 +399,15 @@ startpre () {
   :
 }
 
+link_ns () {
+  [ -d /var/run/netns ] || mkdir -p /var/run/netns
+  [ -L /var/run/netns/$pid ] || ln -s /proc/$pid/ns/net /var/run/netns/$pid
+}
+
 startpost () {
 	# Setup after starting container
+  pid=$(sudo docker inspect -f '{{.State.Pid}}' "$name" 2>/dev/null)
+
   if [ "$nettype" == "pipework" ]; then
     # Wait until container is started
     while ! isrunning $name; do
@@ -303,7 +415,20 @@ startpost () {
     done
   	# Add IP address to host adapter using pipework
   	[ "$nettype" == "pipework" ] && \
-  		exe "$build_dir/pipework" $adapter $name "$localip"
+  		exe "$build_dir/pipework" $adapter $name "$hostip"
+  # else
+  #   if [ "$static_ip" ]; then
+  #     oldip="$(docker inspect -f '{{.NetworkSettings.IPAddress}}' "$name")"
+  #     oldipprefix="$(docker inspect -f '{{.NetworkSettings.IPPrefixLen}}' "$name")"
+  #     link_ns
+  #     exe ip netns exec $pid ip addr del "${oldip}/$oldipprefix" dev eth0
+  #     exe ip netns exec $pid ip addr add "$static_ip/${subnet##*/}" dev eth0
+  #   fi
+  #   if [ "${gateway:-}" ]; then
+  #     link_ns
+  #     exe ip netns exec $pid ip route del default
+  #     exe ip netns exec $pid ip route add default via "$gateway"
+  #   fi
   fi
 	firewall
 }
@@ -313,29 +438,29 @@ stoppost () {
 	:
 }
 
+# shellcheck disable=SC2120
 start () {
-	# Start the container
-	containerexists $name || create
-  [ "$nettype" == "bridge" ] && \
-    [ -n "$localip" ] && \
-    ! ip address show | grep -q "$localip" && \
-      exe ip address add "$localip" dev $adapter
-  if contains "-a" "$*"; then
-    # Start the container, attach STDOUT/STDERR and forward signals
+  startpre "$@"
+  containerexists $name || create
+  # Start the container, attach STDOUT/STDERR and forward signals
+  contains "-a" "$*" && \
     exe exec docker start "$@" $name
-  else
-	  exe docker start "$@" $name
-    startpost
-  fi
+  exe docker start "$@" $name
+  startpost
 }
 
+# TODO: change unit to use run -i instead of start -a
 run () {
-  create
-  start "$@"
+  startpre "$@"
+  # shellcheck disable=SC2046
+  exe docker run "$@" $volumes $docker_options $(createnetwork) $(get_hostname) --name $name "$image" $cmd_options
+  startpost
 }
 
 startservice () {
 	# Start the container's service via systemd
+  exe systemctl stop "$name"
+  exe remove
 	exe systemctl start "$name"
 }
 
@@ -416,8 +541,9 @@ runshell () {
 	# instead of what was specified in the Dockerfile
 	remove
 	#exe docker run -it $volumes $options --name $name $name /bin/sh
+  local entrypoint; entrypoint="${*:-"/bin/sh"}"
   # shellcheck disable=SC2046
-  exe docker run -it $volumes $options $(createnetwork) -h $name --name $name "$image" /bin/sh
+  exe docker run -it $volumes $docker_options $(createnetwork) $(get_hostname) --name $name "$image" "$entrypoint"
   return 0
 }
 
@@ -439,6 +565,7 @@ clean () {
 	remove
 	removeimage
 	[ -f "$build_dir/pipework" ] && exe rm "$build_dir/pipework"
+  # TODO: if there are no remaining conatiners on the network, remove it
   return 0
 }
 
@@ -450,7 +577,7 @@ firewall () {
 install () {
 	# Create systemd service file from template and register it
 
-  unit_template | \
+  unit | \
   while read line; do
 	  eval echo "$line"
 	done >/tmp/$name.service
@@ -492,6 +619,31 @@ isfn () {
   return 1
 }
 
+get_adapter () {
+  case $(uname) in
+    Linux)  ip -o link show | awk -F'[ :]+' '{if ($9 == "UP" && $2 ~ /^en/ ) { print $2 }}' ;;
+    Darwin) echo -n "en0" ;;
+  esac
+}
+
+get_dwfile () {
+  # Find the parameter file
+  if [ -d "$1" ]; then
+    build_dir="$(cd "$1" && pwd)"
+    dw_file="$build_dir/DWfile"
+    shift
+  elif [ -f "$1" ]; then
+  	build_dir=$(cd "$(dirname "$1")" && pwd)
+  	dw_file="$build_dir/$(basename "$1")"
+  	shift
+  elif [ "${dw_file:-}" ]; then
+    build_dir=$(cd "$(dirname "$dw_file")" && pwd)
+  elif dw_file="$(upsearch DWfile)"; then
+  	build_dir=$(cd "$(dirname "$dw_file")" && pwd)
+  fi
+
+  args=("$@")
+}
 
 command_loop () {
   # Command line parameters are evaluated as functions if they are contained in
@@ -521,52 +673,37 @@ CYAN="\033[1;36m"
 GREEN="\033[1;32m"
 NO_COLOR="\033[0m"
 
-# Supported parameters and defaults where appropriate
-name=
-description=
-image=
-volumes=
-nettype=bridge
-localip=
-# Guess the appropriate adapter name
-adapter=$(ip -o link show | awk -F'[ :]+' '{if ($9 == "UP" && $2 ~ /^en/ ) { print $2 }}')
-network=bridge
-subnet=
-ports=
-options=
-# depends=
+dw_cmd="$(which dw)"
 
-unit_template=
-# dw_template=
-dw_dir="$HOME/.bin"
+# Try to find a DWfile
+get_dwfile "$@"
+set -- "${args[@]}"
+if [ -f "$dw_file" ]; then
+  echo "Sourcing DWfile: $dw_file"
+  # shellcheck source=/dev/null
+  . "$dw_file"
+else
+  echo "No DWfile found, continuing..."
+fi
 
-# Read container specific parameters
-# shellcheck source=/dev/null
-[ -f "$build_dir/$build_file" ] && . "$build_dir/$build_file"
+# Set defaults
+adapter="${adapter:-$(get_adapter)}"
+nettype="${nettype:-bridge}"
+network="${network:-bridge}"
+icc="${icc:-false}"
+
+echo "Build directory: $build_dir"
+
+[ -f "$build_dir/DWfile.template" ] && dw_template="$build_dir/DWfile.template"
+[ -f "$build_dir/template.service" ] && unit_template="$build_dir/template.service"
 
 # Assign defaults if parameters are still blank
-[ -z "$image" ] && image=$name
-[ -n "$subnet" ] && subnet_opts="--subnet $subnet"
+[ -z "${image:-}" ] && image="$name" && dockerfile=true
+[ "${subnet:-}" ] && subnet_opts="--subnet $subnet"
 [ -z "$*" ] && set -- start
 
 # Make a list of the dw functions
-fns=$(awk '/^[0-9a-zA-Z]+\s*\(\)/ {print $1}' $0 $build_dir/$build_file 2>/dev/null)
-
-[ "$1" == "help" ] && display_help && exit
-
-# Find the parameter file
-if [ -d "$1" ]; then
-	build_dir=`cd "$1" && pwd`
-	build_file="DWfile"
-	shift
-elif [ -f "$1" ]; then
-	build_dir=`cd "$( dirname "$1" )" && pwd`
-	build_file="$(basename "$1")"
-	shift
-else
-	build_dir=$(pwd)
-	build_file="DWfile"
-fi
+fns=$(awk '/^[0-9a-zA-Z]+\s*\(\)/ {print $1}' $0 $dw_file 2>/dev/null)
 
 
 ### MAIN

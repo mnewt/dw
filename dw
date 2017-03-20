@@ -189,23 +189,23 @@ EOF
 
 parameters () {
 cat <<-EOF
-  dw_cmd=$dw_cmd
-  name=$name
-  description=$description
-  image=$image
-  volumes=$volumes
-  nettype=$nettype
-  hostip=$hostip
-  adapter=$adapter
-  network=${network:-}
-  subnet=${subnet:-}
-  ports=$ports
-  docker_options=$docker_options
-  run_options=${run_options:-}
-  cmd_options=${cmd_options:-}
-  depends=${depends:-}
-  unit_template=${unit_template:-}
-  dw_template=${dw_template:-}
+          dw_cmd=$dw_cmd
+            name=$name
+     description=${description:-}
+           image=$image
+         volumes=${volumes:-}
+         nettype=$nettype
+          hostip=${hostip:-}
+         adapter=$adapter
+         network=${network:-}
+          subnet=${subnet:-}
+           ports=${ports:-}
+  docker_options=${docker_options:-}
+     run_options=${run_options:-}
+     cmd_options=${cmd_options:-}
+         depends=${depends:-}
+   unit_template=${unit_template:-}
+     dw_template=${dw_template:-}
 EOF
 }
 
@@ -628,11 +628,11 @@ get_adapter () {
 
 get_dwfile () {
   # Find the parameter file
-  if [ -d "$1" ]; then
+  if [ -d "${1-}" ]; then
     build_dir="$(cd "$1" && pwd)"
     dw_file="$build_dir/DWfile"
     shift
-  elif [ -f "$1" ]; then
+  elif [ -f "${1-}" ]; then
   	build_dir=$(cd "$(dirname "$1")" && pwd)
   	dw_file="$build_dir/$(basename "$1")"
   	shift
@@ -640,6 +640,8 @@ get_dwfile () {
     build_dir=$(cd "$(dirname "$dw_file")" && pwd)
   elif dw_file="$(upsearch DWfile)"; then
   	build_dir=$(cd "$(dirname "$dw_file")" && pwd)
+  else
+    build_dir="."
   fi
 
   args=("$@")
@@ -698,6 +700,7 @@ echo "Build directory: $build_dir"
 [ -f "$build_dir/template.service" ] && unit_template="$build_dir/template.service"
 
 # Assign defaults if parameters are still blank
+[ -z "${name:-}" ] && name=""
 [ -z "${image:-}" ] && image="$name" && dockerfile=true
 [ "${subnet:-}" ] && subnet_opts="--subnet $subnet"
 [ -z "$*" ] && set -- start

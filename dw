@@ -3,16 +3,6 @@
 # Shell script for building and managing docker containers on single host installations
 # Requirements: docker, sudo, wget
 
-# TODO:
-# - Rename `pipework` nettype to somewintg like `pipework-host`
-# - Add new nettype - `pipework-bridge`
-# - Inter-container routing support (using pipework)
-#   - gateway variable
-#   - static ip variable
-# - Make install/uninstall macos compatible
-# - When systemd calls `run -a` on a container that isn't built, it doesn't work right
-# - Disable icc by default
-
 set -o nounset   # Treat unset variables as an error
 
 scriptname="dw"
@@ -70,7 +60,7 @@ image=
 # The hostname
 hostname=--name--
 
-# Volume options. Passed directly to `docker create`
+# Volume options. Passed directly to `docker run`
 # volumes="-v /etc/localtime:/etc/localtime:ro -v /opt/config/$name:/config -v /data:/data"
 volumes="-v /etc/localtime:/etc/localtime:ro \
 -v /opt/config/$name:/config \
@@ -131,7 +121,7 @@ icc=false
 #   ports="-p $hostip:80:8080 -p $hostip:443:8443 -p $hostip:8053:53/udp"
 ports=
 
-# Additional options to pass to `docker create`
+# Additional options to pass to `docker run`
 # options="--log-opt max-size=10m"
 docker_options="--log-opt max-size=10m"
 
@@ -160,7 +150,6 @@ EOF
   fi
 }
 
-# shellcheck disable=SC2120
 unit () {
   if [ -f "${1:-}" ]; then
     cat "$1"
@@ -176,9 +165,8 @@ After=docker.service $unit_dependencies
 
 [Service]
 Restart=always
-ExecStart="$dw_cmd" "$dw_file" start -a
+ExecStart="$dw_cmd" "$dw_file" runexec
 ExecStartPost="$dw_cmd" "$dw_file" startpost
-ExecStop="$dw_cmd" "$dw_file" stop
 ExecStopPost="$dw_cmd" "$dw_file" stoppost
 
 [Install]
@@ -209,9 +197,20 @@ cat <<-EOF
 EOF
 }
 
+with_color () {
+  # Print with specified colors
+  # background
+  printf "\e[48;5;${1}m"
+  # foreground
+  printf "\e[38;5;${2}m"
+  echo -e -n "${3}"
+  # reset
+  printf "\e[0m"
+}
+
 exe () {
 	# Display and execute the command
-	>&2 echo "\$ $*"; "$@"
+	>&2 with_color 000 244 "\$ $*\n"; "$@"
 }
 
 first () {
@@ -312,7 +311,7 @@ build () {
 	# Build the container
   buildpre
   if [ "${dockerfile:-}" ] && [ -f "$build_dir/Dockerfile" ]; then
-  	exe docker build "$@" -t $name "$build_dir"
+  	exe Docker Build "$@" -T $Name --pull "$build_dir"
   	if [ "$nettype" == "pipework" ]; then
   		exe wget "https://raw.githubusercontent.com/jpetazzo/pipework/master/pipework" \
   			-O "$build_dir/pipework"
@@ -438,23 +437,25 @@ stoppost () {
 	:
 }
 
-# shellcheck disable=SC2120
 start () {
   startpre "$@"
   containerexists $name || create
-  # Start the container, attach STDOUT/STDERR and forward signals
-  contains "-a" "$*" && \
-    exe exec docker start "$@" $name
   exe docker start "$@" $name
   startpost
 }
 
-# TODO: change unit to use run -i instead of start -a
 run () {
   startpre "$@"
-  # shellcheck disable=SC2046
-  exe docker run "$@" $volumes $docker_options $(createnetwork) $(get_hostname) --name $name "$image" $cmd_options
+  containerexists $name && remove
+  exe docker run -it $run_opts "$@" $volumes $docker_options $(createnetwork) $(get_hostname) --name $name $image ${cmd_options:-}
   startpost
+}
+
+runexec () {
+  # hand over process to docker run
+  startpre "$@"
+  containerexists $name && remove
+  exe exec docker run $run_opts "$@" $volumes $docker_options $(createnetwork) $(get_hostname) --name $name $image ${cmd_options:-}
 }
 
 startservice () {
@@ -693,6 +694,7 @@ adapter="${adapter:-$(get_adapter)}"
 nettype="${nettype:-bridge}"
 network="${network:-bridge}"
 icc="${icc:-false}"
+run_opts="${run_opts:---sig-proxy=true}"
 
 echo "Build directory: $build_dir"
 

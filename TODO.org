@@ -1,6 +1,7 @@
 
 * TODO Darken '$' commands like yarn (test on light background too)
-* TODO Pull base image when building
+* DONE Pull base image when building
+- State "DONE"       from "TODO"       [2018-09-09 Sun 09:47]
 Accomplished with the =--pull= flag
 * TODO Rename `pipework` nettype to something like `pipework-host`
 * TODO Add new nettype - `pipework-bridge`
@@ -10,5 +11,3 @@ Accomplished with the =--pull= flag
 * TODO Make install/uninstall macos compatible
 * TODO When systemd calls `run -a` on a container that isn't built, it doesn't work right
 * TODO Disable icc by default
-
-

@@ -311,7 +311,7 @@ build () {
 	# Build the container
   buildpre
   if [ "${dockerfile:-}" ] && [ -f "$build_dir/Dockerfile" ]; then
-  	exe Docker Build "$@" -T $Name --pull "$build_dir"
+  	exe docker build "$@" -t $name --pull "$build_dir"
   	if [ "$nettype" == "pipework" ]; then
   		exe wget "https://raw.githubusercontent.com/jpetazzo/pipework/master/pipework" \
   			-O "$build_dir/pipework"
@@ -357,7 +357,7 @@ addip () {
 }
 
 createnetwork () {
-  # Create the docker network and output `docker create` network options
+  # Create the docker network(s) and output `docker create` network options
   case $nettype in
     pipework)
       # pipework will set up the network
@@ -365,7 +365,9 @@ createnetwork () {
       ;;
     container)
       # share an existing container's network stack
-      echo -n "--net container:$network "
+      for net in $network; do
+        echo -n "--net container:$net "
+      done
       ;;
     host)
       addip
@@ -373,9 +375,11 @@ createnetwork () {
       ;;
     bridge)
       addip
-      docker network inspect $network >/dev/null 2>&1 || \
-       exe docker network create $subnet_opts $network >/dev/null
-      echo -n "--net $network " # --icc=$icc "
+      for net in $network; do
+        docker network inspect $net >/dev/null 2>&1 || \
+          exe docker network create $subnet_opts $net >/dev/null
+        echo -n "--net $net " # --icc=$icc "
+      done
       publishports
       ;;
   esac

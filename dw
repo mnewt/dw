@@ -181,6 +181,7 @@ cat <<-EOF
             name=$name
      description=${description:-}
            image=$image
+       build_dir=$build_dir
          volumes=${volumes:-}
          nettype=$nettype
           hostip=${hostip:-}
@@ -581,7 +582,6 @@ firewall () {
 
 install () {
 	# Create systemd service file from template and register it
-
   unit | \
   while read line; do
 	  eval echo "$line"

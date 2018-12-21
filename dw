@@ -453,7 +453,7 @@ start () {
 run () {
   startpre "$@"
   # shellcheck disable=SC2046
-  exe docker run "$@" $volumes $docker_options $(createnetwork) $(get_hostname) --name $name "$image" $cmd_options
+  exe docker run "$@" $volumes $docker_options $(createnetwork) $(get_hostname) --name $name "$image" ${cmd_options:-}
   startpost
 }
 
@@ -627,7 +627,7 @@ get_adapter () {
 }
 
 get_dwfile () {
-  # Find the parameter file
+  # Find the DWfile
   if [ -d "${1-}" ]; then
     build_dir="$(cd "$1" && pwd)"
     dw_file="$build_dir/DWfile"
@@ -660,7 +660,7 @@ command_loop () {
       shift
     done
   	echo -e "$WHITE==> $CYAN$cmd$NO_COLOR $params"
-  	if ! $cmd $params; then
+  	if ! "$cmd" $params; then
       echo "Aborting because a command encountered an error"
       exit 1
     fi
@@ -679,7 +679,7 @@ dw_cmd="$(which dw)"
 
 # Try to find a DWfile
 get_dwfile "$@"
-set -- "${args[@]}"
+set -- "${args[@]:-}"
 if [ -f "$dw_file" ]; then
   echo "Sourcing DWfile: $dw_file"
   # shellcheck source=/dev/null

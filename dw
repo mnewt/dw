@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # dw: Docker wrapper
 # Shell script for building and managing docker containers on single host installations
 # Requirements: docker, sudo, wget
@@ -226,24 +226,24 @@ rest() {
 
 contains() {
 	case "$2" in
-	*"$1"*)
-		return 0
-		;;
-	*)
-		return 1
-		;;
+	  *"$1"*)
+		  return 0
+		  ;;
+	  *)
+		  return 1
+		  ;;
 	esac
 }
 
 startswith() {
 	# Does $2 start with $1?
 	case $2 in
-	$1*)
-		return 0
-		;;
-	*)
-		return 1
-		;;
+	  $1*)
+		  return 0
+		  ;;
+	  *)
+		  return 1
+		  ;;
 	esac
 }
 
@@ -318,7 +318,7 @@ build() {
 		exe docker build "$@" -t $name "$build_dir"
 		if [ "$nettype" == "pipework" ]; then
 			exe wget "https://raw.githubusercontent.com/jpetazzo/pipework/master/pipework" \
-				-O "$build_dir/pipework"
+				  -O "$build_dir/pipework"
 			exe chmod u+x "$build_dir/pipework"
 		fi
 	else
@@ -339,20 +339,20 @@ publishports() {
 	ip_opts=
 	[ -n "${hostip:-}" ] && ip_opts="$(echo $hostip | cut -d '/' -f1):"
 	case "${ports:-}" in
-	"") ;;
-	-*)
-		echo -n $ports
-		;;
-	*:*)
-		for p in $ports; do
-			echo -n "-p $ip_opts$p "
-		done
-		;;
-	*)
-		for p in $ports; do
-			echo -n "-p $ip_opts$(echo -n $p | cut -d "/" -f1):$p "
-		done
-		;;
+	  "") ;;
+	  -*)
+		  echo -n $ports
+		  ;;
+	  *:*)
+		  for p in $ports; do
+			  echo -n "-p $ip_opts$p "
+		  done
+		  ;;
+	  *)
+		  for p in $ports; do
+			  echo -n "-p $ip_opts$(echo -n $p | cut -d "/" -f1):$p "
+		  done
+		  ;;
 	esac
 }
 
@@ -364,25 +364,25 @@ addip() {
 createnetwork() {
 	# Create the docker network and output `docker create` network options
 	case $nettype in
-	pipework)
-		# pipework will set up the network
-		echo -n "--net none "
-		;;
-	container)
-		# share an existing container's network stack
-		echo -n "--net container:$network "
-		;;
-	host)
-		addip
-		echo -n "--net host "
-		;;
-	bridge)
-		addip
-		docker network inspect $network >/dev/null 2>&1 ||
-			exe docker network create $subnet_opts $network >/dev/null
-		echo -n "--net $network " # --icc=$icc "
-		publishports
-		;;
+	  pipework)
+		  # pipework will set up the network
+		  echo -n "--net none "
+		  ;;
+	  container)
+		  # share an existing container's network stack
+		  echo -n "--net container:$network "
+		  ;;
+	  host)
+		  addip
+		  echo -n "--net host "
+		  ;;
+	  bridge)
+		  addip
+		  docker network inspect $network >/dev/null 2>&1 ||
+			  exe docker network create $subnet_opts $network >/dev/null
+		  echo -n "--net $network " # --icc=$icc "
+		  publishports
+		  ;;
 	esac
 }
 
@@ -628,8 +628,8 @@ isfn() {
 
 get_adapter() {
 	case $(uname) in
-	Linux) ip -o link show | awk -F'[ :]+' '{if ($9 == "UP" && $2 ~ /^en/ ) { print $2 }}' ;;
-	Darwin) echo -n "en0" ;;
+	  Linux) ip -o link show | awk -F'[ :]+' '{if ($9 == "UP" && $2 ~ /^en/ ) { print $2 }}' ;;
+	  Darwin) echo -n "en0" ;;
 	esac
 }
 
@@ -712,7 +712,7 @@ echo "Build directory: $build_dir"
 [ -z "$*" ] && set -- start
 
 # Make a list of the dw functions
-fns=$(awk '/^[0-9a-zA-Z]+\s*\(\)/ {print $1}' $0 $dw_file 2>/dev/null)
+fns=$(awk -F'[(){ ]' '/^(function\s*)?[0-9a-zA-Z]+\s*\(\)/ {print $1}' $0 $dw_file 2>/dev/null)
 
 ### MAIN
 
